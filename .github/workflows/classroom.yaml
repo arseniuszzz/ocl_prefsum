@@ -1,0 +1,384 @@
+name: BuildTest
+run-name: OCL-PrefSum ${{ inputs.student_url }} by @${{ github.actor }}
+
+on:
+  create:
+  workflow_dispatch:   
+    inputs:
+      test1:
+        description: 'Test with n < 256'
+        type: boolean
+        default: true        
+      test2:
+        description: 'Test with n > 256'
+        type: boolean
+        default: false       
+      test6:
+        description: 'Huge test (only for gpu-server)'
+        type: boolean
+        default: false
+      gpu_server:
+        description: 'Запуск на сервере с профайлером'
+        type: boolean
+        default: true
+      bits:
+        description: 'X bits'
+        required: true
+        default: 'x64'
+        type: choice
+        options:
+          - x86
+          - x64
+  
+env:
+  SESSION_MANE: "prefsum"
+  RCPROF_FOLDER: "rcprof"
+  INPUT: "test_data/in"
+  OUTPUT: "test_data/out"
+  REF: "test_data/ref"
+  BUILDLOG: "build.log"
+  OUTLOG: "result.log"
+  EXE: __test.exe
+  BITS: ${{ inputs.bits == 'x64' && '-m64' || '-m32' }}
+
+defaults:
+  run:
+    shell: pwsh
+
+jobs:                
+  buildtest:
+    continue-on-error: false
+    timeout-minutes: 60
+    strategy:
+      max-parallel: 1
+      fail-fast: true
+      matrix:
+        os: [windows-latest, self-hosted]
+      
+    runs-on: ${{ matrix.os }}
+    name: OCL-PrefSum on ${{ matrix.os }} ${{ inputs.student_url }} by @${{ github.actor }}
+    env:
+      GITHUB_TOKEN: ${{ secrets.REPO_TOKEN }}
+        
+    steps:
+      - uses: git9527/clean-up-action@v1
+      
+      - uses: actions/checkout@v4
+        with:
+          token: ${{secrets.GS_TOKEN}}
+      
+      - name: init
+        id: init
+        if: matrix.os == 'windows-latest'
+        run: | 
+          #systeminfo          
+          #Get-WmiObject -Class Win32_Processor -ComputerName. | Select-Object -Property [a-z]*
+                
+          "::group::Remove old test_data"
+          Remove-Item 'test_data/*' -Recurse -Include out_*
+          "::endgroup::"
+          
+          "::group::reg"
+          $registryPath = "HKLM:\SOFTWARE\WOW6432Node\Khronos\OpenCL\Vendors"  
+          $Name = "${{ github.workspace }}\\.github\\opencl_for_tests\\amdocl.dll"
+          $value = "00000000"
+
+          IF(!(Test-Path $registryPath)) { New-Item -Path $registryPath -Force | Out-Null }
+          New-ItemProperty -Path $registryPath -Name $name -Value $value -PropertyType DWORD -Force | Out-Null
+          echo "::endgroup::"
+                      
+          "::group::PATH"  
+          "${{ github.workspace }}\\.github\\opencl_for_tests" >> $env:GITHUB_PATH
+          echo $env:PATH
+          echo $env:GITHUB_PATH
+          "::endgroup::"
+
+          choco upgrade llvm
+          
+          echo "Note: On github-runner use x86 OpenCL SDK. Build on x64 will be skipped (status on GitHub - passed)" >> $env:GITHUB_STEP_SUMMARY
+                  
+      - name: build
+        id: build
+        if: matrix.os == 'windows-latest' && inputs.bits != 'x64' || matrix.os == 'self-hosted'
+        run: |
+          #Set-PSDebug -Trace 1
+          $ErrorActionPreference = 'SilentlyContinue'
+          $build_exit_code = 0
+
+          $cpp = Get-ChildItem -Force -File -Name main.cpp
+          $c = Get-ChildItem -Force -File -Name main.c
+          "::group::debug info"
+          echo "cpp=$cpp $($cpp.GetType()) $($cpp.GetType() -eq [String])"
+          echo "c=$cpp $($c.GetType()) $($c.GetType() -eq [String])"
+          "::endgroup::"
+
+          $cpp_build = $false
+          try { if ($cpp.GetType() -eq [String]) { $cpp_build = $true } } catch { $cpp_build = $false }
+
+          ${{ env.BITS }}
+          
+          try {
+            if (-not $cpp_build)
+            {
+              pwsh -Command { clang -fopenmp  ${{ env.BITS }} -std=c2x -DCL_TARGET_OPENCL_VERSION=120 -D_CRT_SECURE_NO_WARNINGS -D_USE_MATH_DEFINES -O2 -Wall -Wno-gnu-anonymous-struct -Wvla -I".github/opencl_for_tests/include" -I"include" -L".github/opencl_for_tests/lib" $((Get-ChildItem -Path . -Include @('*.c') -Recurse -ErrorAction SilentlyContinue -Force).FullName) -o ${{env.EXE}} -lOpenCL *>&1 > ${{env.BUILDLOG}} }
+            }
+            else
+            {
+              pwsh -Command { clang -fopenmp  ${{ env.BITS }} -std=c++20 -DCL_TARGET_OPENCL_VERSION=120 -D_CRT_SECURE_NO_WARNINGS -D_USE_MATH_DEFINES -O2 -Wall -Wno-gnu-anonymous-struct -Wvla -I".github/opencl_for_tests/include" -I"include" -L".github/opencl_for_tests/lib" $((Get-ChildItem -Path . -Include @('*.cpp') -Recurse -ErrorAction SilentlyContinue -Force).FullName) -o ${{env.EXE}} -lOpenCL *>&1 > ${{env.BUILDLOG}} }
+            }
+             
+          } catch {
+            Write-Output "❌ build failed!"
+          } finally {
+            $build_exit_code = $LastExitCode
+            $blog="$(Get-Content ${{env.BUILDLOG}} -Raw)"
+            echo "# Build" >> $env:GITHUB_STEP_SUMMARY
+            echo "LastExitCode: $($build_exit_code)" >> $env:GITHUB_STEP_SUMMARY  
+            echo "<details><summary>Build log (can be empty)</summary>`n" >> $env:GITHUB_STEP_SUMMARY  
+            echo '```' >> $env:GITHUB_STEP_SUMMARY
+            $blog >> $env:GITHUB_STEP_SUMMARY
+            echo '```' >> $env:GITHUB_STEP_SUMMARY
+            echo "`n</details>`n`n" >> $env:GITHUB_STEP_SUMMARY  
+            
+            "::group::Build log"  
+            echo $blog
+            "::endgroup::"
+          }
+          exit($build_exit_code + -not (& Test-Path -Path ${{env.EXE}} -PathType Leaf))
+                         
+      - name: tests
+        id: tests
+        if: matrix.os == 'windows-latest' && inputs.bits != 'x64' || matrix.os == 'self-hosted'
+        run: |
+          $test_id = @()
+          if ($${{ inputs.test1 }}) {$test_id += @(1, 2)  }
+          if ($${{ inputs.test2 }}) {$test_id += @(0)  }
+          if ('${{matrix.os}}' -eq 'windows-latest') 
+          { 
+            Copy-Item -Path ".github/opencl_for_tests/OpenCL.dll" -Destination "." 
+          }    
+          else
+          {            
+            if ($${{ inputs.test6 }}) {$test_id += @(6)  }           
+          }
+
+          if ($test_id.Count -eq 0)
+          {
+            echo "# Tests" >> $env:GITHUB_STEP_SUMMARY  
+            echo "0 test selected; skip step" >> $env:GITHUB_STEP_SUMMARY  
+            exit(0)
+          }
+          
+          $test_exit_code = 0
+                    
+          foreach ($i in $test_id)
+          {         
+            echo "# Test $i" >> $env:GITHUB_STEP_SUMMARY  
+            echo "Output log test_$($i)"
+
+                try 
+                {
+                  $ErrorActionPreference = 'SilentlyContinue'
+
+                  $infile = if ($i -eq 6) { "../../../../../prefix_sum_tests/in6.txt" } else { "${{env.INPUT}}$i.txt" }
+                  $ti = "https://github.com/"+"${{github.repository}}"+"/tree/main/$($infile)"
+                  
+                  $outfile = "${{env.OUTPUT}}_${{matrix.os}}_$i.txt"
+                  $to = "https://github.com/"+"${{github.repository}}"+"/tree/main/$($outfile)"
+                  
+                  $reffile = if ($i -eq 6) { "../../../../../prefix_sum_tests/ref6.txt" } else { "${{env.REF}}$i.txt" }
+                  $tr = "https://github.com/"+"${{github.repository}}"+"/tree/main/$($reffile)"
+
+                  $cmd = " --input $infile --output $outfile --device-type all --device-index 0"
+                  echo 'run:' >> $env:GITHUB_STEP_SUMMARY
+                    echo '```' >> $env:GITHUB_STEP_SUMMARY
+                    echo $cmd >> $env:GITHUB_STEP_SUMMARY
+                    echo '```' >> $env:GITHUB_STEP_SUMMARY
+                  $processOptions = @{
+                    FilePath = "${{env.EXE}}"
+                    ArgumentList = $cmd
+                    RedirectStandardOutput = "stdout.log"
+                    RedirectStandardError = "stderr.log"
+                    NoNewWindow = $true
+                    PassThru = $true
+                  }
+                  $p = Start-Process @processOptions
+                  Wait-Process -InputObject $p       
+                  $exit_code_p = [int]$p.ExitCode
+
+                } 
+                catch 
+                {
+                  echo "input: [$($infile)]($ti)" >> $env:GITHUB_STEP_SUMMARY
+
+                  echo "❌ [ERROR] Program crashed" >> $env:GITHUB_STEP_SUMMARY                
+                  $test_exit_code += 1
+                  echo "[debug] error codes: $test_exit_code" >> $env:GITHUB_STEP_SUMMARY 
+                  continue
+                }    
+
+                $stderr = (Get-Content "stderr.log") 
+                $stdout = (Get-Content "stdout.log")
+                
+                echo "input: [$($infile)]($ti)" >> $env:GITHUB_STEP_SUMMARY
+                echo "ref: [$($reffile)]($tr)" >> $env:GITHUB_STEP_SUMMARY
+                echo "exit code: $exit_code_p" >> $env:GITHUB_STEP_SUMMARY           
+
+                echo "[stderr]:" >> $env:GITHUB_STEP_SUMMARY
+                echo '```' >> $env:GITHUB_STEP_SUMMARY
+                echo "$($stderr)"  >> $env:GITHUB_STEP_SUMMARY  
+                echo '```' >> $env:GITHUB_STEP_SUMMARY
+                echo "[stderr]: $stderr"
+                      
+                echo "[stdout]:" >> $env:GITHUB_STEP_SUMMARY
+                echo '```' >> $env:GITHUB_STEP_SUMMARY
+                $stdout  >> $env:GITHUB_STEP_SUMMARY  
+                echo '```' >> $env:GITHUB_STEP_SUMMARY
+                echo "[stdout]: $stdout"
+                
+                echo "Result:" >> $env:GITHUB_STEP_SUMMARY  
+                                
+                if ($exit_code_p -ne 0)
+                {               
+                  echo '```' >> $env:GITHUB_STEP_SUMMARY
+                  echo "❌ [ERROR] Program completed with code $exit_code_p (!= 0)" >> $env:GITHUB_STEP_SUMMARY 
+                  echo '```' >> $env:GITHUB_STEP_SUMMARY               
+                  $test_exit_code += 1
+                }          
+                elseif ((& Test-Path -Path stderr.log -PathType Leaf) -and ((Get-ChildItem -Path stderr.log).Length -ne 0))
+                {
+                  echo '```' >> $env:GITHUB_STEP_SUMMARY
+                  echo "❌ [ERROR] Stderr is not empty [program completed with code $exit_code_p]" >> $env:GITHUB_STEP_SUMMARY 
+                  echo '```' >> $env:GITHUB_STEP_SUMMARY              
+                  $test_exit_code += 1
+                } 
+                elseif (-not (& Test-Path -Path $outfile -PathType Leaf))
+                {
+                  echo '```' >> $env:GITHUB_STEP_SUMMARY
+                  echo "❌ [ERROR] Output file does not exist [program completed with code $exit_code_p]" >> $env:GITHUB_STEP_SUMMARY 
+                  echo '```' >> $env:GITHUB_STEP_SUMMARY              
+                  $test_exit_code += 1
+                }
+                elseif ((Get-ChildItem -Path $outfile).Length -eq 0) 
+                {
+                  echo '```' >> $env:GITHUB_STEP_SUMMARY
+                  echo "❌ [ERROR] Output file is empty [program completed with code $exit_code_p]" >> $env:GITHUB_STEP_SUMMARY  
+                  echo '```' >> $env:GITHUB_STEP_SUMMARY             
+                  $test_exit_code += 1
+                }
+                elseif ((& Test-Path -Path stdout.log -PathType Leaf) -and ((Get-ChildItem -Path stdout.log).Length -eq 0))
+                {
+                  echo '```' >> $env:GITHUB_STEP_SUMMARY
+                  echo "❌ [ERROR] Stdout empty [program completed with code $exit_code_p]" >> $env:GITHUB_STEP_SUMMARY    
+                  echo '```' >> $env:GITHUB_STEP_SUMMARY            
+                  $test_exit_code += 1
+                }
+                else
+                {  
+                  $processOptions1 = @{
+                    FilePath = "python"
+                    ArgumentList = @(".github/workflows/testcmp.py", "$infile", "$outfile", "$reffile")
+                    RedirectStandardOutput = "tstdout.log"
+                    RedirectStandardError = "tstderr.log"
+                    NoNewWindow = $true
+                    PassThru = $true
+                  }
+                  $p1 = Start-Process @processOptions1
+                  Wait-Process -InputObject $p1       
+                  $exit_code_p = [int]$p1.ExitCode
+
+                  ls
+
+                  echo $(Get-Content "tstdout.log")
+                  echo $(Get-Content "tstderr.log")
+                  echo $exit_code_p
+                  
+                  $lec = $exit_code_p
+                  if ($lec -ne 0)
+                  {                    
+                    echo '```' >> $env:GITHUB_STEP_SUMMARY
+                    echo $(Get-Content "tstdout.log") >> $env:GITHUB_STEP_SUMMARY 
+                    echo $(Get-Content "tstderr.log") >> $env:GITHUB_STEP_SUMMARY 
+                    echo "❌ FAILED [output != expected]" >> $env:GITHUB_STEP_SUMMARY 
+                    echo '```' >> $env:GITHUB_STEP_SUMMARY               
+                    $test_exit_code += 1
+                  }
+                  else 
+                  {
+                    echo '```' >> $env:GITHUB_STEP_SUMMARY
+                    "✅ PASSED" >> $env:GITHUB_STEP_SUMMARY
+                    echo '```' >> $env:GITHUB_STEP_SUMMARY   
+                  }
+                  if ($i -ne 6)
+                  {
+                    if (Test-Path $outfile) { git add $outfile }
+                    echo "output: [$($outfile)]($to)" >> $env:GITHUB_STEP_SUMMARY   
+                  }                
+                }
+                echo "[debug] error codes: $test_exit_code" >> $env:GITHUB_STEP_SUMMARY                 
+          }
+          
+          "::group::dirs"
+          dir -Recurse -Path ..
+          "::endgroup::"
+                    
+          "::group::git config"
+          git config user.name github-actions
+          git config user.email github-actions@github.com  
+          "::endgroup::"
+          
+          "::group::upload results"
+          git commit -m "Automatically upload workflow test results from ${{matrix.os}}"
+          git push --force origin HEAD:main    
+          "::endgroup::"
+        
+          exit($test_exit_code)
+                    
+      - name: profiling
+        id: profiling
+        if: matrix.os != 'windows-latest' && inputs.gpu_server
+        run: |  
+          #Set-PSDebug -Trace 1
+          $idx = if ($${{ inputs.test6 }}) { 5 } else { 0 }
+
+          $rcprof = if ('${{ inputs.bits }}' -eq 'x64') { 'rcprof-x64' } else { 'rcprof' }
+          "${{vars.RCPROF_ROOT_FOLDER}}\$($rcprof).exe"
+          echo "--workingdirectory .`n"          
+          
+          echo "# Profiling test $idx" >> $env:GITHUB_STEP_SUMMARY  
+          
+          $rcprof_work_folder = "./${{env.RCPROF_FOLDER}}_$idx"    
+          if (-not (Test-Path $rcprof_work_folder)) { mkdir $rcprof_work_folder }
+      
+          $infile =  if ($${{ inputs.test6 }}) { "../../../../../prefix_sum_tests/in$idx.txt" } else { "test_data/in$idx.txt" }
+          $outfile = "test_data/out_$idx.txt"
+          echo 'run:' >> $env:GITHUB_STEP_SUMMARY
+            echo '```' >> $env:GITHUB_STEP_SUMMARY
+            echo "${{vars.RCPROF_ROOT_FOLDER}}\$($rcprof).exe --outputfile `"$($rcprof_work_folder)/rcprof.csv`" --sessionname `"${{env.SESSION_MANE}}_prof`" --perfcounter --occupancy --workingdirectory `".`" `"${{env.EXE}}`" `"--input`" `"$infile`" `"--output`" `"$outfile`" `"--device-type`" `"all`" `"--device-index`" `"0`"" >> $env:GITHUB_STEP_SUMMARY
+            echo '```' >> $env:GITHUB_STEP_SUMMARY
+          & "${{vars.RCPROF_ROOT_FOLDER}}\$($rcprof).exe" --outputfile "$($rcprof_work_folder)/rcprof.csv" --sessionname "${{env.SESSION_MANE}}_prof" --perfcounter --occupancy --workingdirectory "." "${{env.EXE}}" "--input" "$infile" "--output" "$outfile" "--device-type" "all" "--device-index" "0" >> "out.log"
+
+          $outlog = (Get-Content "out.log")
+            echo "[out.log]:" >> $env:GITHUB_STEP_SUMMARY
+            echo '```' >> $env:GITHUB_STEP_SUMMARY
+            $outlog  >> $env:GITHUB_STEP_SUMMARY
+            echo '```' >> $env:GITHUB_STEP_SUMMARY
+            
+          "::group::upload results"
+          if (Test-Path $rcprof_work_folder) { git add "$($rcprof_work_folder)/*" }
+          git commit -m "Automatically upload workflow perf results from ${{matrix.os}}"
+          git push --force origin HEAD:main    
+          "::endgroup::"
+          
+      - name: cleanup
+        if: ${{ always() }}
+        id: cleanup
+        run: Remove-Item -Recurse -Force -Path ${{github.workspace}} -ErrorAction SilentlyContinue
+  
+  results: 
+    needs: [buildtest]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    
+    steps:
+      - run: if ( '${{ needs.buildtest.result }}' -ne 'success' ) { exit(1) }

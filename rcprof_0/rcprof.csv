@@ -1,0 +1,20 @@
+#ProfileFileVersion=5.6
+#ProfilerVersion=5.6.0
+#API=OpenCL
+#Application=C:/Users/ocl_user24_0/TEST/skkv-mp-gpu/actions-runner/_work/gpu24-backlog-ocl-prefsum-arseniuszzz/gpu24-backlog-ocl-prefsum-arseniuszzz/__test.exe
+#ApplicationArgs=--input test_data/in0.txt --output test_data/out_0.txt --device-type all --device-index 0
+#WorkingDirectory=.
+#Device gfx1010:xnack- Platform Vendor=Advanced Micro Devices, Inc.
+#Device gfx1010:xnack- Platform Name=AMD Accelerated Parallel Processing
+#Device gfx1010:xnack- Platform Version=OpenCL 2.1 AMD-APP (3608.0)
+#Device gfx1010:xnack- CLDriver Version=3608.0 (PAL,LC)
+#Device gfx1010:xnack- CLRuntime Version=OpenCL 2.0 AMD-APP (3608.0)
+#Device gfx1010:xnack- NumberAppAddressBits=64
+#Device gfx1010:xnack- Board Name=AMD Radeon RX 5700 XT
+#Device gfx1010:xnack- PCIE device id=29471
+#OS Version=Windows 10 Build 10.0.0
+#DisplayName=prefsum_prof
+#ListSeparator=,
+#ForceSinglePass=False
+Method, ExecutionOrder, ThreadID, CallIndex, GlobalWorkSize, WorkGroupSize, Time, LocalMemSize, VGPRs, SGPRs, ScratchRegs, Wavefronts, ExecTime, OccupancyWaves, OccupancyPercent, AllInsts, VALUInsts, VALUInt64Insts, SALUInsts, BranchInsts, SFetchInsts, TexFetchInsts, TexWriteInsts, FlatFetchInsts, FlatWriteInsts, LDSInsts, VALUUtilization, VALUBusy, SALUBusy, WaitOnBarrier, WaitOnVMem, WaitOnSMemLDS, ExecBoundByTex, ExecBoundByFlat, ExecBoundByLDS, LDSBankConflicts, LDSBankConflictRate, SrcFetchSize, MemFetchSize, MemFetchSpeedGBps, MemWriteSize, MemUnitBusy, L0CacheHit, L1CacheHit, L2CacheHit, CacheMiss
+prefix_sum__k1_d1_gfx1010:xnack-, 1, 5804, 38, {   1024       1       1}, {   64     1     1},         0.00916, 256, 7, 12, 0,        32.00,         0.01,         0.21,         1.04,       216.44,        51.69,         1.00,        67.94,        30.94,         5.00,        14.00,         0.00,         9.44,         2.44,        20.00,        97.24,         0.10,         0.13,         3.13,         0.36,         0.35,         0.00,         0.00,         0.00,         0.00,         0.00,        79.58,         4.94,         0.51,         4.94,        13.34,        59.21,        15.07,        82.09,         6.20
